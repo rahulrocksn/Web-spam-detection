@@ -1,0 +1,486 @@
+---
+title: "Content Based Dataset"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Imports
+
+```{r}
+library(mltools)
+library(data.table)
+library(kohonen)
+library(dummies)
+library(ggplot2)
+library(sp)
+library(maptools)
+library(reshape2)
+library(rgeos)
+library(party)
+library(rpart)
+library(rpart.plot)
+library(tree)
+library(randomForest)
+library(naivebayes)
+library(class)
+library(ROCR)
+```
+
+# Raw Files
+
+```{r}
+trainRAW <- data.frame(read.csv("../Dataset/webspam-uk2007-set1-1-10_TRAINING/WEBSPAM-UK2007-SET1-labels.txt", header= F, sep=" ", dec=".", col.names= c('hostid','label','spamicity','assessments')))
+testRAW <- data.frame(read.csv("../Dataset/webspam-uk2007-set2-1-10_TEST/WEBSPAM-UK2007-SET2-labels.txt", header= F, sep=" ", dec=".", col.names= c('hostid','label','spamicity','assessments')))
+cbRAW <- data.frame(read.csv("uk-2007-05.content_based_features.csv", header=T))
+```
+
+# Transforming
+
+Get training and testing dataset. Also convert all the values where spamicity \>= 0.5 to 1 and 0 for others.
+
+```{r}
+cbTrain <- merge(trainRAW,cbRAW,by.x = "hostid", by.y="X.hostid")
+cbTrain$spamicity <- as.numeric(as.character(cbTrain$spamicity))
+cbTrain <- na.omit(cbTrain)
+cbTrain$spamicity[cbTrain$spamicity < 0.5] <- 0
+cbTrain$spamicity[cbTrain$spamicity >= 0.5] <- 1
+
+cbTest <- merge(testRAW,cbRAW,by.x = "hostid", by.y="X.hostid")
+cbTest$spamicity <- as.numeric(as.character(cbTest$spamicity))
+cbTest <- na.omit(cbTest)
+cbTest$spamicity[cbTest$spamicity < 0.5] <- 0
+cbTest$spamicity[cbTest$spamicity >= 0.5] <- 1
+```
+
+Get the numeric columns only from the above datasets
+
+```{r}
+numeric_cb_test <- cbTest[, c(-1, -2, -4, -5)]
+numeric_cb_train <- cbTrain[, c(-1, -2, -4, -5)]
+```
+
+# Correlation
+
+Get the most correlated columns and put those in DFs
+
+```{r}
+data_cor <- abs(cor(numeric_cb_train[ , colnames(numeric_cb_train) != "spamicity"],  # Calculate correlations
+                numeric_cb_train$spamicity))
+
+df_most_cor <- subset(numeric_cb_train, select = c("AVG_64",
+"AVG_55", "HMG_40", "HST_16", "AVG_65", "AVG_56", "AVG_66",
+"HST_7", "HST_17", "HMG_41", "spamicity"))
+df_most_cor_test <- subset(numeric_cb_test, select = c("AVG_64",
+"AVG_55", "HMG_40", "HST_16", "AVG_65", "AVG_56", "AVG_66",
+"HST_7", "HST_17", "HMG_41", "spamicity"))
+```
+
+# Balance Training Data
+
+```{r}
+train <- data.frame(df_most_cor)
+test <- data.frame(df_most_cor_test)
+
+train_spam <- subset(train, spamicity == 1)
+train_spam <- rbind(train_spam, train_spam)
+train_not_spam <- subset(train, spamicity == 0)
+train_not_spam <- train_not_spam[sample(1:nrow(train_not_spam), size = nrow(train_spam), replace = F), ]
+train_balanced <- rbind(train_spam, train_not_spam)
+```
+
+# SOM
+
+```{r}
+data_train_matrix <- scale(train_balanced)
+som_grid <- somgrid(xdim = 16, ydim = 16, topo = "hexagonal")
+map <- som(data_train_matrix,
+           grid = som_grid,
+           rlen = 3500,
+           alpha = c(0.5, 0.01))
+```
+
+## plots
+
+```{r}
+plot(map, type = "changes")
+```
+
+```{r}
+plot(map, type = 'counts')
+```
+
+```{r}
+plot(map, type = 'codes')
+```
+
+## Heatmaps
+
+```{r}
+source('./coolBlueHotRed.R')
+plot(map, type = "property", 
+     property = getCodes(map)[, 1],
+     main = colnames(train_balanced)[1],
+     palette.name=coolBlueHotRed)
+```
+
+```{r}
+source('./coolBlueHotRed.R')
+plot(map, type = "property", 
+     property = getCodes(map)[, 2],
+     main = colnames(train_balanced)[2],
+     palette.name=coolBlueHotRed)
+```
+
+```{r}
+source('./coolBlueHotRed.R')
+plot(map, type = "property", 
+     property = getCodes(map)[, 3],
+     main = colnames(train_balanced)[3],
+     palette.name=coolBlueHotRed)
+```
+
+```{r}
+source('./coolBlueHotRed.R')
+plot(map, type = "property", 
+     property = getCodes(map)[, 4],
+     main = colnames(train_balanced)[4],
+     palette.name=coolBlueHotRed)
+```
+
+```{r}
+source('./coolBlueHotRed.R')
+plot(map, type = "property", 
+     property = getCodes(map)[, 5],
+     main = colnames(train_balanced)[5],
+     palette.name=coolBlueHotRed)
+```
+
+## Clustering
+
+```{r}
+mydata <- matrix(unlist(map$codes), ncol = length(train_balanced), byrow = FALSE)
+wss <- (nrow(mydata)-1)*sum(apply(mydata,2,var))
+for (i in 2:15) wss[i] <- sum(kmeans(mydata,
+                                     centers=i)$withinss)
+par(mar=c(5.1,4.1,4.1,2.1))
+```
+
+```{r}
+plot(1:15, wss, type="b", xlab="Number of Clusters",
+     ylab="Within groups sum of squares", main="Within cluster sum of squares (WCSS)")
+```
+
+```{r}
+pretty_palette <- c("#1f77b4", '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2')
+som_cluster <- cutree(hclust(dist(mydata)), 6)
+plot(map, type="mapping", bgcol = pretty_palette[som_cluster], main = "Clusters")
+```
+
+```{r}
+plot(map, type="codes", bgcol = pretty_palette[som_cluster], main = "Clusters")
+```
+
+## Supervised SOM model
+
+```{r}
+trainX <- scale(train_balanced[,-11])
+testX <- scale(test[,-11],
+               center = attr(trainX, "scaled:center"),
+               scale = attr(trainX, "scaled:scale"))
+trainY <- factor(train_balanced[,11])
+Y <- factor(test[,11])
+test[,11] <- 0
+testXY <- list(independent = testX, dependent = test[,11])
+
+set.seed(222)
+map1 <- xyf(trainX,
+            classvec2classmat(factor(trainY)),
+            grid = somgrid(16, 16, "hexagonal"),
+            rlen = 3500)
+
+pred <- predict(map1, newdata = testXY)
+(cm <- table(Predicted = pred$predictions[[2]], Actual = Y))
+(accuracy <- (cm[1, 1] + cm[2, 2])/(cm[1, 1] + cm[2, 2] + cm[1, 2] + cm[2, 1]))
+(precision <- cm[2, 2] / (cm[2, 2] + cm[2, 1]))
+(recall <- cm[2, 2] / (cm[2, 2] + cm[1, 2]))
+(f_measure <- (2 * precision * recall) / (precision + recall))
+```
+
+## Supervised SOM with unbalanced data
+
+```{r}
+train_som <- data.frame(df_most_cor)
+test_som <- data.frame(df_most_cor_test)
+
+#train <- df_most_cor[df_most_cor$spamicity %in% c(0,1), ] 
+#test <- df_most_cor_test[df_most_cor_test$spamicity %in% c(0,1), ]
+trainX <- scale(train_som[,-11])
+testX <- scale(test_som[,-11],
+               center = attr(trainX, "scaled:center"),
+               scale = attr(trainX, "scaled:scale"))
+trainY <- factor(train_som[,11])
+Y <- factor(test_som[,11])
+test_som[,11] <- 0
+testXY <- list(independent = testX, dependent = test_som[,11])
+
+set.seed(222)
+map1 <- xyf(trainX,
+            classvec2classmat(factor(trainY)),
+            grid = somgrid(30, 30, "hexagonal"),
+            rlen = 4500)
+
+pred <- predict(map1, newdata = testXY)
+(cm <- table(Predicted = pred$predictions[[2]], Actual = Y))
+(accuracy <- (cm[1, 1] + cm[2, 2])/(cm[1, 1] + cm[2, 2] + cm[1, 2] + cm[2, 1]))
+(precision <- cm[2, 2] / (cm[2, 2] + cm[2, 1]))
+(recall <- cm[2, 2] / (cm[2, 2] + cm[1, 2]))
+(f_measure <- (2 * precision * recall) / (precision + recall))
+```
+
+```{r}
+train <- data.frame(df_most_cor)
+test <- data.frame(df_most_cor_test)
+
+train_spam <- subset(train, spamicity == 1)
+train_spam <- rbind(train_spam, train_spam)
+train_not_spam <- subset(train, spamicity == 0)
+train_not_spam <- train_not_spam[sample(1:nrow(train_not_spam), size = nrow(train_spam), replace = F), ]
+train_balanced <- rbind(train_spam, train_not_spam)
+```
+# DT
+
+```{r}
+train_balanced$spamicity <- factor(train_balanced$spamicity)
+test$spamicity <- factor(test$spamicity)
+tree <- rpart(spamicity ~., data = train_balanced)
+rpart.plot(tree)
+printcp(tree)
+```
+
+```{r}
+table(Predicted = predict(tree, train_balanced[-11], type = "class"), Actual = train_balanced[, "spamicity"])
+```
+
+```{r}
+pred <- predict(tree, test[-11], type = "class")
+(cm <- table(Predicted = pred, Actual = test[, "spamicity"]))
+(accuracy <- (cm[1, 1] + cm[2, 2])/(cm[1, 1] + cm[2, 2] + cm[1, 2] + cm[2, 1]))
+(precision <- cm[2, 2] / (cm[2, 2] + cm[2, 1]))
+(recall <- cm[2, 2] / (cm[2, 2] + cm[1, 2]))
+(f_measure <- (2 * precision * recall) / (precision + recall))
+```
+
+```{r}
+perf <- performance(
+  prediction(
+    as.numeric(pred),
+    as.numeric(test$spamicity)
+  ),
+  "tpr", "fpr"
+)
+plot(perf)
+```
+
+```{r}
+auc_roc(as.integer(pred == 1),
+    as.integer(test$spamicity == 1))
+```
+
+# Random Forest
+
+```{r}
+rf <- randomForest(
+  spamicity ~ .,
+  data=train_balanced,
+)
+pred = predict(rf, newdata=test[-11])
+(cm = table(Predicted = pred, Actual = test[,11]))
+(accuracy <- (cm[1, 1] + cm[2, 2])/(cm[1, 1] + cm[2, 2] + cm[1, 2] + cm[2, 1]))
+(precision <- cm[2, 2] / (cm[2, 2] + cm[2, 1]))
+(recall <- cm[2, 2] / (cm[2, 2] + cm[1, 2]))
+(f_measure <- (2 * precision * recall) / (precision + recall))
+```
+
+```{r}
+perf <- performance(
+  prediction(
+    as.numeric(pred),
+    as.numeric(test$spamicity)
+  ),
+  "tpr", "fpr"
+)
+plot(perf)
+```
+
+```{r}
+auc_roc(as.integer(pred == 1),
+    as.integer(test$spamicity == 1))
+```
+
+# Naive Baye's
+
+```{r}
+set.seed(3553)
+nb <- naive_bayes(spamicity ~ ., data = train_balanced, usekernel = T) 
+# Training data
+p1 <- predict(nb, train_balanced)
+(tab1 <- table(Predicted = p1, Actual = train_balanced$spamicity))
+# Testing Data
+p2 <- predict(nb, test[-11])
+(cm = table(Predicted = p2, Actual = test$spamicity))
+(accuracy <- (cm[1, 1] + cm[2, 2])/(cm[1, 1] + cm[2, 2] + cm[1, 2] + cm[2, 1]))
+(precision <- cm[2, 2] / (cm[2, 2] + cm[2, 1]))
+(recall <- cm[2, 2] / (cm[2, 2] + cm[1, 2]))
+(f_measure <- (2 * precision * recall) / (precision + recall))
+```
+
+## ROC
+
+```{r}
+perf <- performance(
+  prediction(
+    as.integer(p2),
+    as.integer(test$spamicity)
+  ),
+  "tpr", "fpr"
+)
+plot(perf)
+```
+
+```{r}
+auc_roc(as.integer(p2 == 1),
+    as.integer(test$spamicity == 1))
+```
+
+# knn
+
+```{r}
+knn_model <- knn(train = train_balanced[, -11], test = test[, -11], cl = train_balanced[, 11], k = 1, prob = TRUE) 
+(cm = table(Predicted = knn_model, Actual = test$spamicity))
+(accuracy <- (cm[1, 1] + cm[2, 2])/(cm[1, 1] + cm[2, 2] + cm[1, 2] + cm[2, 1]))
+(precision <- cm[2, 2] / (cm[2, 2] + cm[2, 1]))
+(recall <- cm[2, 2] / (cm[2, 2] + cm[1, 2]))
+(f_measure <- (2 * precision * recall) / (precision + recall))
+```
+
+## ROC
+
+```{r}
+perf <- performance(
+  prediction(
+    as.numeric(knn_model),
+    as.numeric(test$spamicity)
+  ),
+  "tpr", "fpr"
+)
+plot(perf)
+```
+
+```{r}
+auc_roc(as.integer(knn_model == 1),
+    as.integer(test$spamicity == 1))
+```
+
+# PCA
+
+## Initial PCA
+
+```{r}
+numeric_cb.X <- subset(numeric_cb_train, select = -c(spamicity))
+numeric_cb.PCAParams <- prcomp(numeric_cb.X, center = TRUE, scale = TRUE)
+summary(numeric_cb.PCAParams)$rotation
+
+numeric_cb.PCA <- data.frame(numeric_cb_train$spamicity, numeric_cb.PCAParams$x)[,c(1:11)]
+names(numeric_cb.PCA)[1] <- "spamicity"
+
+
+numeric_cb_test.x <- subset(numeric_cb_test, select = -c(spamicity))
+numeric_cb_test.PCA <- scale(numeric_cb_test.x) %*% numeric_cb.PCAParams$rotation
+numeric_cb_test.PCA <- data.frame(numeric_cb_test$spamicity, numeric_cb_test.PCA)
+names(numeric_cb_test.PCA)[1] <- "spamicity"
+```
+
+## Balancing
+
+```{r}
+cbTrainSpam <- subset(numeric_cb.PCA, spamicity == 1)
+cbTrainSpam <- rbind(cbTrainSpam, cbTrainSpam)
+cbTrainNotSpam <- subset(numeric_cb.PCA, spamicity == 0)
+cbTrainNotSpam <- cbTrainNotSpam[sample(1:nrow(cbTrainNotSpam), size = nrow(cbTrainSpam), replace = F), ]
+cbTrainBalanced <- rbind(cbTrainSpam, cbTrainNotSpam)
+
+data_cor <- abs(cor(cbTrainBalanced[ , colnames(cbTrainBalanced) != "spamicity"],  # Calculate correlations
+                cbTrainBalanced$spamicity))
+sort(data_cor, decreasing = TRUE)
+```
+
+## Naive Baye's
+
+```{r}
+train_nb <- data.frame(cbTrainBalanced)
+test_nb <- subset(numeric_cb_test.PCA, select = c(1:11))
+
+train_nb$spamicity <- factor(train_nb$spamicity)
+test_nb$spamicity <- factor(test_nb$spamicity)
+
+set.seed(1245)
+nb <- naive_bayes(spamicity ~ ., data = train_nb, usekernel = T) 
+p2 <- predict(nb, test_nb[-1])
+(cm = table(Predicted = p2, Actual = test$spamicity))
+(accuracy <- (cm[1, 1] + cm[2, 2])/(cm[1, 1] + cm[2, 2] + cm[1, 2] + cm[2, 1]))
+(precision <- cm[2, 2] / (cm[2, 2] + cm[2, 1]))
+(recall <- cm[2, 2] / (cm[2, 2] + cm[1, 2]))
+(f_measure <- (2 * precision * recall) / (precision + recall))
+```
+
+### ROC
+
+```{r}
+perf <- performance(
+  prediction(
+    as.numeric(p2),
+    as.numeric(test$spamicity)
+  ),
+  "tpr", "fpr"
+)
+plot(perf)
+```
+
+```{r}
+auc_roc(as.integer(p2 == 1),
+    as.integer(test$spamicity == 1))
+```
+
+## Random Forest
+
+```{r}
+rf <- randomForest(
+    spamicity ~ .,
+    data = train_nb
+)
+pred <- predict(rf, test_nb[-1])
+(cm = table(Predicted = pred, Actual = test$spamicity))
+(accuracy <- (cm[1, 1] + cm[2, 2])/(cm[1, 1] + cm[2, 2] + cm[1, 2] + cm[2, 1]))
+(precision <- cm[2, 2] / (cm[2, 2] + cm[2, 1]))
+(recall <- cm[2, 2] / (cm[2, 2] + cm[1, 2]))
+(f_measure <- (2 * precision * recall) / (precision + recall))
+```
+
+### ROC
+
+```{r}
+perf <- performance(
+  prediction(
+    as.numeric(pred),
+    as.numeric(test$spamicity)
+  ),
+  "tpr", "fpr"
+)
+plot(perf)
+```
+
+```{r}
+auc_roc(as.integer(pred == 1),
+    as.integer(test$spamicity == 1))
+```

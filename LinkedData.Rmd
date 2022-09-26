@@ -1,0 +1,932 @@
+---
+title: "Inital Observations of Linked Transformed DataSet"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you
+execute code within the notebook, the results appear beneath the code.
+
+If you are viewing it in a browser (HTML file), the original code that
+can be found and executed in the associated .Rmd file.
+
+Try executing this chunk by clicking the *Run* button within the chunk
+or by placing your cursor inside it and pressing *Cmd+Shift+Enter*.
+
+## Supporting Libaries
+
+```{r}
+# Used for calculating AUC and more
+# library(mltools)
+# library(data.table)
+
+# SOM Support libaries
+library(kohonen)
+library(dummies)
+library(ggplot2)
+library(sp)
+library(maptools)
+library(reshape2)
+library(rgeos)
+
+
+
+```
+
+### Setting support functions and working directory
+
+```{r}
+set.seed(10)
+# ONLY IF RUNNING NATIVELY, ELSE EXECUTE NEXT BLOCK IN R NOTEBOOK
+# setwd("~/OneDrive/University/INFO411_DataMining/Project/RProject/Project4/DataSet")
+
+### Helping Functions
+binningSpam <- function(value){
+  if (value> 0.5){
+    return(factor("Spam"))
+  }
+  else{
+    return(factor("NonSpam"))
+  }
+}
+
+binningSpamNum <- function(value){
+  if (value> 0.5){
+    return(1)
+  }
+  else{
+    return(1)
+  }
+}
+
+```
+
+```{r, setup, include=FALSE}
+knitr::opts_knit$set(root.dir = '~/OneDrive/University/INFO411_DataMining/Project/RProject/Project4/DataSet')
+```
+
+## Importing Data and Visualising
+
+We'll import in the following data sets: - trainRAW - The labels we'll
+use for training that shows which host IDs are "Spam", "not Spam", or
+"Undecided" - testRAW - The labels we'll use for the testing that shows
+which host IDs are "Spam", "not Spam", or "Undecided" - linkRAW -
+Domains and their associated linked attributes. - The data here is not
+normalized, not transformed. - linkTransfromedRAW - Domains and their
+associated linked attributes. - The data here is normalized via Log(10),
+and has multiple transformations performed and added as new columns -
+For example, there are columns where the PageRank of the Homepage is
+divided by the next linked PageRank
+
+```{r}
+trainRAW <- data.frame(read.csv("webspam-uk2007-set1-1-10_TRAINING/WEBSPAM-UK2007-SET1-labels.txt", header= F, sep=" ", dec="."))
+testRAW <- data.frame(read.csv("webspam-uk2007-set2-1-10_TEST/WEBSPAM-UK2007-SET2-labels.txt", header= F, sep=" ", dec="."))
+linkRAW <- data.frame(read.csv("uk-2007-05.link_based_features.csv", header=T))
+linkTransfromedRAW <- data.frame(read.csv("uk-2007-05.link_based_features_transformed.csv", header=T))
+```
+
+### Analysis of the linked dataset
+
+```{r}
+# Original Link Train DS
+linkTrain <- merge(trainRAW,linkRAW,by.x = "V1", by.y="X.hostid")
+linkTrain <- linkTrain[,c(-1,-2,-4,-5)]
+linkTrain$V3 <- as.numeric(as.character(linkTrain$V3))
+linkTrain <- na.omit(linkTrain)
+
+# Correlation for the original Train DS. Correlation is not strong at all.
+corTable <- abs(cor(linkTrain,y=linkTrain$V3))
+corTable = corTable[order(corTable, decreasing = T),,drop=F]
+
+head(corTable,20)
+```
+
+From a quick glance, we can see that none of the data has any strong
+correlation with the result (at least without transformation).
+
+Let's take a look at the other dataset.
+
+### Analysis of the linked dataset (transformed)
+
+```{r}
+# Loading the Train DS that has been logged
+linkTransformedTrain <- merge(trainRAW,linkTransfromedRAW,by.x = "V1", by.y="X.hostid")
+linkTransformedTrain <- linkTransformedTrain[,c(-1,-2,-4)]
+linkTransformedTrain$V3 <- as.numeric(as.character(linkTransformedTrain$V3))
+linkTransformedTrain <- na.omit(linkTransformedTrain)
+
+# Correlation table. 
+corTable2 <- abs(cor(linkTransformedTrain,y=linkTransformedTrain$V3))
+corTable2 = corTable2[order(corTable2, decreasing = T),,drop=F]
+
+head(corTable2,21)
+
+headhead <- head(corTable2,21)
+headnames <- row.names(headhead)
+headnames <- headnames[2:11]
+headnames20 <- row.names(headhead)[2:21]
+
+sum(linkTransformedTrain$V3 <0.5)
+sum(linkTransformedTrain$V3 > 0.5)
+
+```
+
+Looking at the correlation of the corTable, we find a lot more
+attributes that have stronger correlation.
+
+We also see that the distribution of Spam to Non-Spam is very skewed,
+thus we'll try to balance the dataset before visualizing the top 10
+correlated.
+
+We'll utilize an oversampling technique to try to ensure we have enough
+samples for training. (2x the amount of "Spam" we have)
+
+```{r}
+### OVERSAMPLING and splitting
+# Undecided (0.5) are dropped
+# I tried undersampling... no distinct change
+
+linkTransformedTrainSpam <- subset(linkTransformedTrain, V3 > 0.5)
+linkTransformedTrainNotSpam <- subset(linkTransformedTrain, V3 < 0.5)
+linkTransformedTrainSpam <- linkTransformedTrainSpam[sample(1:nrow(linkTransformedTrainSpam), size=444, replace=T),]
+linkTransformedTrainNotSpam <- linkTransformedTrainNotSpam[sample(1:nrow(linkTransformedTrainNotSpam), size=444, replace=F),]
+
+linkTransformedBalanced = rbind(linkTransformedTrainSpam, linkTransformedTrainNotSpam)
+
+linkTransformedBalanced$binnedY <- sapply(linkTransformedBalanced$V3, binningSpam)
+#linkTransformedTest$binnedY <- sapply(linkTransformedTest$V3, binningSpam)
+
+```
+
+### Plot visualization
+
+```{r}
+plot(linkTransformedBalanced$log_OP_truncatedpagerank_1_mp_div_pagerank_mp_CP_,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$log_OP_truncatedpagerank_2_mp_div_pagerank_mp_CP_,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$log_OP_outdegree_mp_div_pagerank_mp_CP_,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$L_outdegree_mp,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$log_OP_truncatedpagerank_3_mp_div_pagerank_mp_CP_,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$L_avgin_of_out_mp,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$log_OP_avgin_of_out_mp_mul_outdegree_mp_CP_,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$log_OP_truncatedpagerank_4_mp_div_pagerank_mp_CP_,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$L_avgin_of_out_hp,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$log_OP_outdegree_hp_div_pagerank_hp_CP_,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$L_outdegree_hp,linkTransformedBalanced$binnedY)
+plot(linkTransformedBalanced$log_OP_avgin_of_out_hp_mul_outdegree_hp_CP_,linkTransformedBalanced$binnedY)
+```
+
+We can can see that on some charts that there are a few instances such a
+`L_outdegree_mp` there are a few instances on both spam and non-spam
+where it sits at -50. Let's take a look at what those instances are and
+how many of them are spam and non-spam
+
+```{r}
+sum(linkTransformedBalanced[linkTransformedBalanced$L_outdegree_mp < -40,]$V3 > 0.5)
+sum(linkTransformedBalanced[linkTransformedBalanced$L_outdegree_mp < -40,]$V3 < 0.5)
+```
+
+There seems to be a skew of 1 value compared to the rest, as such, we'll
+leave it in as it could be helpful for our algorithms later.
+
+### SOM Visualization
+
+Let's visualise it with an SOM to see how well defined clusters are.
+
+```{r}
+#Colour palette definition
+pretty_palette <- c("#1f77b4", '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2')
+
+# ------------------- SOM TRAINING ---------------------------
+{
+#choose the variables with which to train the SOM
+#the following selects column 2,4,5,8
+data_train <- linkTransformedBalanced[,headhead]
+
+# now train the SOM using the Kohonen method
+data_train_matrix <- as.matrix(scale(data_train))
+names(data_train_matrix) <- names(data_train)
+require(kohonen)
+x_dim=15
+y_dim=15
+som_grid <- somgrid(xdim = x_dim, ydim=y_dim, topo="hexagonal")  
+# Train the SOM model!
+if (packageVersion("kohonen") < 3){
+  system.time(som_model <- som(data_train_matrix, 
+                               grid=som_grid, 
+                               rlen=1000, 
+                               alpha=c(0.9,0.01),
+                               n.hood = "circular",
+                               keep.data = TRUE ))
+}else{
+  system.time(som_model <- som(data_train_matrix, 
+                               grid=som_grid, 
+                               rlen=1000, 
+                               alpha=c(0.9,0.01),
+                               mode="online",
+                               normalizeDataLayers=false,
+                               keep.data = TRUE ))
+}
+
+plot(som_model, type = "changes")
+#counts within nodes
+plot(som_model, type = "counts", main="Node Counts")
+#map quality
+plot(som_model, type = "quality", main="Node Quality/Distance")
+#neighbour distances
+plot(som_model, type="dist.neighbours", main = "SOM neighbour distances", palette.name=grey.colors)
+#code spread
+plot(som_model, type = "codes")
+
+plotHeatMap <- function(som_model, data, variable=0){    
+  # Plot a heatmap for any variable from the data set "data".
+  # If variable is 0, an interactive window will be provided to choose the variable.
+  # If not, the variable in "variable" will be plotted.
+  
+  require(dummies)
+  require(kohonen)
+  
+  interactive <- TRUE
+  
+  while (interactive == TRUE){
+    
+    if (variable == 0){
+      #show interactive window.
+      color_by_var <- select.list(names(data), multiple=FALSE,
+                                  graphics=TRUE, 
+                                  title="Choose variable to color map by.")
+      # check for user finished.
+      if (color_by_var == ""){ # if user presses Cancel - we quit function        
+        return(TRUE)
+      }
+      interactive <- TRUE
+      color_variable <- data.frame(data[, color_by_var])
+      
+    } else {
+      color_variable <- data.frame(data[, variable])
+      color_by_var <- names(data)[variable]
+      interactive <- FALSE
+    }
+    
+    #if the variable chosen is a string or factor - 
+    #Get the levels and ask the user to choose which one they'd like.
+    
+    if (class(color_variable[,1]) %in% c("character", "factor", "logical")){
+      #want to spread this out into dummy factors - but colour by one of those.
+      temp_data <- dummy.data.frame(color_variable, sep="_")
+      # print(temp_data)
+      # chosen_factor <- select.list(names(temp_data),
+      #                              multiple=FALSE,
+      #                              graphics=TRUE,
+      #                              title="Choose level of variable for colouring")
+      # print(chosen_factor)
+      chosen_factor <- "data...variable._Spam"
+      color_variable <- temp_data[, chosen_factor]
+      rm(temp_data, chosen_factor)
+      color_by <- color_variable
+    } else {      
+      #impute the missing values with the mean.
+      color_variable[is.na(color_variable[,1]),1] <- mean(color_variable[,1], na.rm=TRUE)
+      #color_by <- capVector(color_variable[,1])
+      #color_by <- scale(color_by)  
+      color_by <- color_variable[,1]
+    }
+    unit_colors <- aggregate(color_by, by=list(som_model$unit.classif), FUN=mean, simplify=TRUE)
+    plot(som_model, type = "property", property=unit_colors[,2], main=color_by_var)    
+  }
+}
+
+plotHeatMap(som_model, linkTransformedBalanced, variable=140)
+
+}
+
+
+```
+
+### SOM Visualization Analysis
+
+While there are clusters that are formed from our data, the clusters do
+not have distinct Spam or non-spam results, thus will likely result in
+our classification model not working well. We'll proceed to try to
+classify, but before then we'll split our data and prepare our testing
+data
+
+```{r}
+
+# Loading some libraries here because if I load them before SOM it bugs out
+# MLP, ROC
+library(RSNNS)
+
+# DT
+library(rpart)
+# 
+# Forest
+library(randomForest)
+# 
+# Naive Bayes
+library(e1071)
+
+```
+
+```{r}
+linkTransformedBalancedSelected <- linkTransformedBalanced[,c(headnames,"binnedY")]
+
+
+split1<- sample(c(rep(0, 0.7 * nrow(linkTransformedBalancedSelected)), rep(1, 0.3 * nrow(linkTransformedBalancedSelected))))
+trainDS <- linkTransformedBalancedSelected[split1 == 0, ]
+testDS <- linkTransformedBalancedSelected[split1 == 1, ]  
+
+# FOR LATER
+linkTransformedBalancedTrain <- linkTransformedBalanced[split1 == 0, ]
+linkTransformedBalancedTest <- linkTransformedBalanced[split1 == 1, ]
+
+linkTransformedTest <-merge(testRAW,linkTransfromedRAW,by.x = "V1", by.y="X.hostid")
+linkTransformedTest <- linkTransformedTest[,c(-1,-2,-4)]
+linkTransformedTest$V3 <- as.numeric(as.character(linkTransformedTest$V3))
+linkTransformedTest <- na.omit(linkTransformedTest)
+linkTransformedTest$binnedY <- sapply(linkTransformedTest$V3, binningSpam)
+
+```
+
+## Training Models on 10 most correlated attributes.
+
+### MLP Training
+
+```{r}
+
+library(RSNNS)
+
+linkTransformedBalanced$binnedY <- sapply(linkTransformedBalanced$V3, binningSpam)
+
+trainValues <- linkTransformedBalanced[, headnames]
+trainTargets <- decodeClassLabels(linkTransformedBalanced[,"binnedY"])
+
+trainset <- splitForTrainingAndTest(trainValues, trainTargets, ratio=0.2)
+trainset <- normTrainingAndTestSet(trainset)
+
+model <- mlp(trainset$inputsTrain, trainset$targetsTrain, size=5, learnFuncParams=c(0.01), maxit=2000, inputsTest=trainset$inputsTest, targetsTest=trainset$targetsTest)
+predictTestSet <- predict(model,trainset$inputsTest)
+
+confusionMatrix(trainset$targetsTrain,fitted.values(model))
+confusionMatrix(trainset$targetsTest,predictTestSet)
+
+par(mar=c(5.1,4.1,4.1,2.1))
+par(mfrow=c(2,2))
+plotIterativeError(model)
+plotRegressionError(predictTestSet[,2], trainset$targetsTest[,2])
+plotROC(fitted.values(model)[,2], trainset$targetsTrain[,2])
+plotROC(predictTestSet[,2], trainset$targetsTest[,2])
+
+
+```
+
+As we can see from the results, it doesn't seem to work very well at all
+as it just classifies everything as spam. We tried running it with
+different tuning parameters (itterations, learning rate, activaiton
+functions), but none of it seemed to fix the issue.
+
+We also didn't bother calcualting the AUC for this graph as there isn't
+any (0)
+
+We'll try it with other algorithms and also revisit it after
+transforming the data more.
+
+### Decision Tree
+
+```{r}
+
+library(rpart)
+library(party)
+library(tree)
+library(randomForest)
+library(mltools)
+
+
+# More tuning parameters
+# https://dzone.com/articles/decision-trees-and-pruning-in-r
+
+Gini.DT.rpart <- rpart(binnedY ~ ., data = trainDS, parms=list(split = "gini"))
+print(Gini.DT.rpart)
+plot(Gini.DT.rpart)
+text(Gini.DT.rpart)
+
+IG.DT.rpart <- rpart(binnedY ~ ., data = trainDS, parms=list(split = "information"))
+print(IG.DT.rpart)
+plot(IG.DT.rpart)
+text(IG.DT.rpart)
+
+GiniDTPredict <- predict(Gini.DT.rpart, testDS, type="class")
+InfomationGainDTPredict <- predict(IG.DT.rpart, testDS, type="class")
+
+table(testDS$binnedY, GiniDTPredict)
+table(testDS$binnedY, InfomationGainDTPredict)
+
+plotROC(as.integer(testDS$binnedY == "Spam"), as.integer(GiniDTPredict == "Spam"))
+auc_roc(as.integer(testDS$binnedY == "Spam"), as.integer(GiniDTPredict == "Spam"))
+plotROC(as.integer(testDS$binnedY == "Spam"), as.integer(InfomationGainDTPredict == "Spam"))
+auc_roc(as.integer(testDS$binnedY == "Spam"), as.integer(InfomationGainDTPredict == "Spam"))
+```
+The results look promising with an area under curve of 72.0%. 
+
+#### Testing with DT on real data set
+```{r}
+GiniDTPredict <- predict(Gini.DT.rpart, linkTransformedTest, type="class")
+InfomationGainDTPredict <- predict(IG.DT.rpart, linkTransformedTest, type="class")
+
+table(linkTransformedTest$binnedY, GiniDTPredict)
+table(linkTransformedTest$binnedY, InfomationGainDTPredict)
+plotROC(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(GiniDTPredict == "Spam"))
+auc_roc(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(GiniDTPredict == "Spam"))
+
+plotROC(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(InfomationGainDTPredict == "Spam"))
+auc_roc(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(InfomationGainDTPredict == "Spam"))
+```
+Unfortunately, we our AUC drops to just 53.6%.
+
+### Random Forest
+
+```{r}
+forest <- randomForest(binnedY ~ ., data = trainDS, nodesize=1, ntree=10)
+plot(forest)
+
+forestPredict <- predict(forest, testDS, type="class")
+table(testDS$binnedY, forestPredict)
+plotROC(as.integer(testDS$binnedY == "Spam"), as.integer(forestPredict == "Spam"))
+auc_roc(as.integer(testDS$binnedY == "Spam"), as.integer(forestPredict == "Spam"))
+
+```
+
+We seem to be getting a better result than DT.
+
+#### Fine tuning RF
+
+```{r}
+
+totalAttempts = data.frame(row.names=c("ntree","mtry","accuracy","precision","recall"))
+
+# Commented out so that it doesn't run on Export. Results can be seen below.
+
+# for (ntree in seq(5,100, by=5)){
+#   for (mtry in c(2:10)){
+#     forest <- randomForest(binnedY ~ ., data = trainDS, nodesize=1, ntree=ntree, mtry=mtry)
+#     forestPredict <- predict(forest, testDS, type="class")
+#     tempTable <- table(testDS$binnedY, forestPredict)
+#     TP <- tempTable["Spam","Spam"]
+#     FP <- tempTable["NonSpam","Spam"]
+#     FN <- tempTable["Spam","NonSpam"]
+#     TN <- tempTable["NonSpam","NonSpam"]
+#     
+#     accuracy <- (TP+TN)/(TP+TN+FP+FN)
+#     precision <- (TP/(TP+FP))
+#     recall <- (TP/(TP+FN))
+#     
+#     totalAttempts <- rbind(totalAttempts, 
+#                            data.frame(ntree=ntree, 
+#                                       mtry=mtry, 
+#                                       accuracy=accuracy,
+#                                       precision = precision,
+#                                       recall=recall))
+#   }
+# }
+
+
+```
+We initially ran a ntree loop from 10-100, and 100-1000 and found that the smaller trees gave better results. We also found that a ntree size of around half the attributes gave the best results. Thus, based on our testing, we decided on a ntree size of 95 and mtry of 6.
+
+```{r}
+forest <- randomForest(binnedY ~ ., data = trainDS, nodesize=1, ntree=95, mtry=6)
+
+forestPredict <- predict(forest, testDS, type="class")
+table(testDS$binnedY, forestPredict)
+
+plotROC(as.integer(testDS$binnedY == "Spam"), as.integer(forestPredict == "Spam"))
+auc_roc(as.integer(testDS$binnedY == "Spam"), as.integer(forestPredict == "Spam"))
+```
+We got a NOT better ROC curve of around 85.2% vs 85.9% 
+There is still some randomness involved and due our small DS, any small shift can result in randomness can have huge changes
+
+#### Testing RF on real test DS
+
+```{r}
+
+forestPredict <- predict(forest, linkTransformedTest, type="class")
+tempTable <- table(linkTransformedTest$binnedY, forestPredict)
+tempTable
+
+plotROC(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict == "Spam"))
+auc_roc(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict == "Spam"))
+```
+
+Unfortunately, the results do not transform to real world testing, with our AUC dropping to 53%
+
+### Naive Bayes
+
+```{r}
+library(e1071)
+
+naiveBayesModel <- naiveBayes(binnedY ~ ., data=trainDS)
+
+naiveBayesPredict <-  predict(naiveBayesModel, testDS, type="class")
+table(testDS$binnedY, naiveBayesPredict)
+
+plotROC(as.integer(testDS$binnedY == "Spam"), as.integer(naiveBayesPredict == "Spam"))
+auc_roc(as.integer(testDS$binnedY == "Spam"), as.integer(naiveBayesPredict == "Spam"))
+
+```
+
+Naive Bayes gives us a AUC curve of 64% on our test data... Not the best, but not surprising as the attributes are likely not independent from each other (which is where Naive Bayes thrives in)
+
+Let's see how well it performs with the real data set
+
+#### Testing NB on real test DS
+
+```{r}
+naiveBayesPredict2 <-  predict(naiveBayesModel, linkTransformedTest, type="class")
+tempTable <- table(linkTransformedTest$binnedY, naiveBayesPredict2)
+tempTable
+
+plotROC(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(naiveBayesPredict2 == "Spam"))
+auc_roc(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(naiveBayesPredict2 == "Spam"))
+```
+We get a AUC of 54%
+
+## Training RF on more different attributes
+
+In attempt to improve our RF Model, we will try a different set of attributes:
+
+The following will be attempted
+ - Using Top 20 Correlated
+ - Whole Data set (with parameter adjustment through rfcv)
+ - Top 20 most important (based on what we got from the Whole Data Set)
+ - Once hyper parameters are fine tuned, training on the whole train DS and using that on our test DS
+ 
+### Top 20 Correlated
+
+```{r}
+headnames2 <- append(headnames20,"binnedY")
+
+trainDS.top20 = linkTransformedBalancedTrain[,headnames2]
+testDS.top20 = linkTransformedBalancedTest[,headnames2]
+
+## BRUTE FORCE
+
+# {
+#   totalAttempts = data.frame(row.names=c("ntree","mtry","accuracy","precision","recall"))
+#   
+#   for (ntree in seq(200,2000, by=100)){
+#     for (mtry in c(2:20)){
+#       forest <- randomForest(binnedY ~ ., data = trainDS.top20, nodesize=1, ntree=ntree, mtry=mtry)
+#       forestPredict <- predict(forest, testDS.top20, type="class")
+#       tempTable <- table(testDS.top20$binnedY, forestPredict)
+#     TP <- tempTable["Spam","Spam"]
+#     FP <- tempTable["NonSpam","Spam"]
+#     FN <- tempTable["Spam","NonSpam"]
+#     TN <- tempTable["NonSpam","NonSpam"]
+#       
+#       accuracy <- (TP+TN)/(TP+TN+FP+FN)
+#       precision <- (TP/(TP+FP))
+#       recall <- (TP/(TP+FN))
+#       
+#       totalAttempts <- rbind(totalAttempts, 
+#                              data.frame(ntree=ntree, 
+#                                         mtry=mtry, 
+#                                         accuracy=accuracy,
+#                                         precision = precision,
+#                                         recall=recall))
+#     }
+#   }
+# }
+
+# Best result was ntree=75, mtry=7
+
+forest20 <- randomForest(binnedY ~ ., data = trainDS.top20, nodesize=1, ntree=75, mtry=7)
+forestPredict20 <- predict(forest20, testDS.top20, type="class")
+plot(forest20)
+table(testDS.top20$binnedY, forestPredict20)
+
+
+plotROC(as.integer(testDS.top20$binnedY == "Spam"), as.integer(forestPredict20 == "Spam"))
+auc_roc(as.integer(testDS.top20$binnedY == "Spam"), as.integer(forestPredict20 == "Spam"))
+
+```
+We get 85.6%, not much better, if anything it's run to run variances.
+
+#### Results on Final DS
+
+```{r}
+forestPredict20 <- predict(forest20, linkTransformedTest, type="class")
+table(linkTransformedTest$binnedY, forestPredict20)
+
+plotROC(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict20 == "Spam"))
+auc_roc(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict20 == "Spam"))
+```
+
+There seems to be a slight improvement, but nothing major over our original. (within 1% margins)
+
+### Training on the whole DS
+
+After more research was done on RF, it was noticed that attribute selection may not be as important for RF, as it will typically use gini index, infomation gain, or some other splitting algorithm to figure out which variable to use. Thus, with fine tuning, we could in theory just shove the whole DS into a Forest and have it work
+
+#### Finding parameters
+
+First, we would want to know how much attributes we should use first. We can use `rfcv()` to figure out which one works best.
+
+```{r}
+linkTransformedBalanced$binnedY <- sapply(linkTransformedBalanced$V3, binningSpam)
+linkTransformedBalancedY <- linkTransformedBalanced$binnedY
+linkTransformedBalancedX <- subset(linkTransformedBalanced,select=-c(binnedY,V3))
+
+linkTransformedTrain$binnedY <- sapply(linkTransformedTrain$V3, binningSpam)
+linkTransformedTrainY <- linkTransformedTrain$binnedY
+linkTransformedTrainX <- subset(linkTransformedTrain,select=-c(binnedY,V3))
+
+result <- rfcv(linkTransformedBalancedX,linkTransformedBalancedY, recursive = T)
+with(result, plot(n.var, error.cv, log="x", type="o", lwd=2))
+
+result <- rfcv(linkTransformedTrainX,linkTransformedTrainY, recursive = T)
+with(result, plot(n.var, error.cv, log="x", type="o", lwd=2))
+```
+
+From our results, we can see that if we were to train on our 70% split, 10-15 would be better.
+But if we were to test on our full training data, 5 would be better
+
+We can then attempt to brute force again to find how big should our tree go
+
+```{r}
+linkTransformedBalancedNoFactor <- subset(linkTransformedBalancedTrain, select=-c(V3))
+trainDS.all <- subset(linkTransformedBalancedTrain, select=-c(V3))
+testDS.all = linkTransformedBalancedTest
+
+# DO NOT RUN AS EXECUTION CAN BE SLOW
+# {
+#   totalAttempts = data.frame(row.names=c("ntree","mtry","accuracy","precision","recall"))
+#   
+#   for (ntree in seq(10,200, by=10)){
+#     for (mtry in c(2:20)){
+#       forest <- randomForest(binnedY ~ ., data = trainDS.all, nodesize=1, ntree=ntree, mtry=mtry)
+#       forestPredict <- predict(forest, testDS.all, type="class")
+#       tempTable <- table(testDS.all$binnedY, forestPredict)
+#       TP <- tempTable[1,1]
+#       FP <- tempTable[2,1]
+#       FN <- tempTable[1,2]
+#       TN <- tempTable[2,2]
+#       
+#       accuracy <- (TP+TN)/(TP+TN+FP+FN)
+#       precision <- (TP/(TP+FP))
+#       recall <- (TP/(TP+FN))
+#       
+#       totalAttempts <- rbind(totalAttempts, 
+#                              data.frame(ntree=ntree, 
+#                                         mtry=mtry, 
+#                                         accuracy=accuracy,
+#                                         precision = precision,
+#                                         recall=recall))
+#     }
+#   }
+# }
+```
+
+The "best" attributes based on our testing above was the following:
+- node size 1
+- amount of trees to use: 120 (makes sense, as even though many places recommend a high number, we have little samples)
+- attributes to be used: 13
+
+```{r}
+forest.All <- randomForest(binnedY ~ ., data = trainDS.all, nodesize=1, ntree=120, mtry=13)
+plot(forest.All)
+forestPredict.All <- predict(forest.All, testDS.all, type="class")
+tempTable.All <- table(testDS.all$binnedY, forestPredict.All)
+tempTable.All
+plotROC(as.integer(testDS.all$binnedY == "Spam"), as.integer(forestPredict.All == "Spam"))
+auc_roc(as.integer(testDS.all$binnedY == "Spam"), as.integer(forestPredict.All == "Spam"))
+
+```
+We got 85.2%. Not much better or worse sadly
+
+#### Testing on the test DS (based on our 70% split)
+
+```{r}
+forestPredict.All.Testing <- predict(forest.All, linkTransformedTest, type="class")
+table(linkTransformedTest$binnedY, forestPredict.All.Testing)
+plotROC(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict.All.Testing == "Spam"))
+auc_roc(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict.All.Testing == "Spam"))
+```
+
+We got a higher AUC area of 55%, but nothing fantastic. 
+
+#### Testing on the test DS (based on all our training data)
+Because we just might have too little data, we are going to attempt to use the parameters we set and train it on all the data we have and see if it nets us a better result
+
+```{r}
+trainDS.all.all <- subset(linkTransformedBalanced, select=-c(V3))
+
+forest.All.All <- randomForest(binnedY ~ ., data = trainDS.all.all, nodesize=1, ntree=120, mtry=13)
+
+plot(forest.All.All)
+
+forestPredict.All.All.Testing <- predict(forest.All.All, linkTransformedTest, type="class")
+table(linkTransformedTest$binnedY, forestPredict.All.All.Testing)
+
+plotROC(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict.All.All.Testing == "Spam"))
+auc_roc(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict.All.All.Testing == "Spam"))
+```
+There is a tad amount of improvement, but nothing major either.
+
+### Training on "important" attributes based on the training the whole DS.
+
+This might seem a bit redundant, but just as a check we tried training it using what the gini split thought was "Important" based on the training DS above.
+
+```{r}
+importanceRankAll <- data.frame(importance(forest.All))
+importanceRankAllNames <- row.names(importanceRankAll)[order(importanceRankAll, decreasing=T)]
+
+importanceRankAllNames.Top20 <- importanceRankAllNames[1:21]
+linkTransformedBalanced.AllSelected <- linkTransformedBalanced[,c(importanceRankAllNames.Top20,"binnedY")]
+
+forestAll2 <- randomForest(binnedY ~ ., data = linkTransformedBalanced.AllSelected, nodesize=1, ntree=50, mtry=10)
+plot(forestAll2)
+forestPredict.top20important <- predict(forestAll2, linkTransformedTest, type="class")
+tempTable.top20important <- table(linkTransformedTest$binnedY, forestPredict.top20important)
+tempTable.top20important
+
+plotROC(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict.top20important == "Spam"))
+auc_roc(as.integer(linkTransformedTest$binnedY == "Spam"), as.integer(forestPredict.top20important == "Spam"))
+
+```
+
+As expected, we got a very similar score compared to training on the whole DS. Makes sense as it will converge at a point.
+
+
+### Training without balancing
+
+We tried training the system without balancing the data set (thus a lot more spam), and it didn't work.
+
+```{r}
+linkTransformedTrain.noBalance <- subset(linkTransformedTrain, select=-c(V3)) 
+forest.NoBalanceAll <- randomForest(binnedY ~ ., data = linkTransformedTrain.noBalance, nodesize=1, ntree=2000, mtry=13)
+forestPredict.NoBalanceAll <- predict(forest.NoBalanceAll, linkTransformedTest, type="class")
+tempTable.NoBalanceAll <- table(linkTransformedTest$binnedY, forestPredict.NoBalanceAll)
+tempTable.NoBalanceAll
+```
+
+The input data to a Forest must be at least somewhat balanced for it to work well.
+
+## Adding PCA to reduce dimensions
+
+As our attribute selection did not seem to help our models, we tried a different way to reduce the dimensions in hope of finding better clusters and patterns for our models to pickup using PCA.
+
+As such, for our next test, we decided to PCA the whole DS and pass the new attributes to our models.
+
+Due to time constraints, we were unable to selectively PCA specific columns instead of all the attributes at once. This will probably heavily affect our Naive Bayes model. 
+
+```{r}
+linkTransformedTrain.X <- subset(linkTransformedTrain,select=-c(binnedY,V3))
+linkTransformedTrain.PCAParams <- prcomp(linkTransformedTrain.X, center = TRUE, scale = TRUE)
+summary(linkTransformedTrain.PCAParams)
+```
+We decided to use all the way to PCA 13 to capture ~80% of the variance in our data
+
+```{r}
+linkTransformedTrain.PCA <- data.frame(linkTransformedTrain$binnedY ,linkTransformedTrain.PCAParams$x)[,c(1:14)]
+names(linkTransformedTrain.PCA)[1] <- "binnedY"
+
+# TRANSFORMING PCA TEST
+linkTransformedTest.x <- subset(linkTransformedTest,select=-c(binnedY,V3))
+linkTransformedTest.PCA <- scale(linkTransformedTest.x) %*% linkTransformedTrain.PCAParams$rotation
+linkTransformedTest.PCA <- data.frame(linkTransformedTest$binnedY, linkTransformedTest.PCA)
+names(linkTransformedTest.PCA)[1] <- "binnedY"
+```
+
+We can then proceed with the same methods we used, but instead we'll be passing in all the columns
+
+```{r}
+
+# Creating Balanced DS, shuffling
+{
+  linkTransformedTrainSpam.PCA <- subset(linkTransformedTrain.PCA, binnedY == "Spam")
+  linkTransformedTrainSpam.PCA <- rbind(linkTransformedTrainSpam.PCA,linkTransformedTrainSpam.PCA)
+  linkTransformedTrainNotSpam.PCA <- subset(linkTransformedTrain.PCA, binnedY == "NonSpam")
+  linkTransformedTrainNotSpam.PCA <- linkTransformedTrainNotSpam.PCA[sample(1:nrow(linkTransformedTrainNotSpam.PCA), size=nrow(linkTransformedTrainSpam.PCA), replace=F),]
+  
+  linkTransformedBalanced.PCA = rbind(linkTransformedTrainSpam.PCA, linkTransformedTrainNotSpam.PCA)
+}
+
+# Shuffle
+
+rows <- sample(nrow(linkTransformedBalanced.PCA))
+linkTransformedBalanced.PCA <- linkTransformedBalanced.PCA[rows,]
+
+split1<- sample(c(rep(0, 0.7 * nrow(linkTransformedBalanced.PCA)),
+                  rep(1, 0.3 * nrow(linkTransformedBalanced.PCA))))
+
+linkTransformedBalancedTrain.PCA <- linkTransformedBalanced.PCA[split1==0,]
+linkTransformedBalancedTest.PCA <- linkTransformedBalanced.PCA[split1==1,]
+
+```
+
+### Training with MLP
+
+```{r}
+library(RSNNS)
+
+binningSpam <- function(value){
+  if (value> 0.5){
+    return(factor("Spam"))
+  }
+  else{
+    return(factor("NonSpam"))
+  }
+}
+
+trainValues <- linkTransformedBalanced.PCA
+trainValues$binnedY = NULL
+trainTargets <- decodeClassLabels(linkTransformedBalanced.PCA[,"binnedY"])
+
+trainset <- splitForTrainingAndTest(trainValues, trainTargets, ratio=0.2)
+trainset <- normTrainingAndTestSet(trainset)
+
+model <- mlp(trainset$inputsTrain, trainset$targetsTrain, size=c(20), learnFuncParams=c(0.001), maxit=4000, inputsTest=trainset$inputsTest, targetsTest=trainset$targetsTest)
+predictTestSet <- predict(model,trainset$inputsTest)
+
+confusionMatrix(trainset$targetsTrain,fitted.values(model))
+confusionMatrix(trainset$targetsTest,predictTestSet)
+
+par(mar=c(5.1,4.1,4.1,2.1))
+par(mfrow=c(2,2))
+plotIterativeError(model)
+plotRegressionError(predictTestSet[,2], trainset$targetsTest[,2])
+plotROC(fitted.values(model)[,2], trainset$targetsTrain[,2])
+plotROC(predictTestSet[,2], trainset$targetsTest[,2])
+
+predictTestSet <- predict(model,linkTransformedTest.PCA[2:14]) # IF ADJUSTING LATER
+confusionMatrix(linkTransformedTest.PCA$binnedY,predictTestSet)
+
+plotROC(as.integer(linkTransformedTest.PCA$binnedY == "Spam"), predictTestSet[,2])
+auc_roc(as.integer(linkTransformedTest.PCA$binnedY == "Spam"), predictTestSet[,2])
+
+
+```
+MLP now works! But our results aren't exactly fantastic with a AUC of 52.3%
+
+### Training with DT
+
+```{r}
+
+Gini.DT.rpart.PCA <- rpart(binnedY ~ ., data = linkTransformedBalancedTrain.PCA, parms=list(split = "gini"), control =list(maxdepth = 7))
+GiniDTPredict.PCA <- predict(Gini.DT.rpart.PCA, linkTransformedBalancedTest.PCA, type="class")
+table(linkTransformedBalancedTest.PCA$binnedY, GiniDTPredict.PCA)
+
+plotROC(as.integer(linkTransformedBalancedTest.PCA$binnedY == "Spam"), as.integer(GiniDTPredict.PCA == "Spam"))
+auc_roc(as.integer(linkTransformedBalancedTest.PCA$binnedY == "Spam"), as.integer(GiniDTPredict.PCA == "Spam"))
+
+GiniDTPredict.Final.PCA <- predict(Gini.DT.rpart.PCA, linkTransformedTest.PCA, type="class")
+table(linkTransformedTest.PCA$binnedY, GiniDTPredict.Final.PCA)
+
+plotROC(as.integer(linkTransformedTest.PCA$binnedY == "Spam"), as.integer(GiniDTPredict.Final.PCA == "Spam"))
+auc_roc(as.integer(linkTransformedTest.PCA$binnedY == "Spam"), as.integer(GiniDTPredict.Final.PCA == "Spam"))
+
+print(Gini.DT.rpart)
+
+```
+Unfortunately, even after optimization (we looped through different depths and types), we are getting 54.3% on the final DS.
+
+### Training with Forest
+
+```{r}
+trainDS.all.all <- linkTransformedBalanced.PCA
+
+forest.All.All <- randomForest(binnedY ~ ., data = trainDS.all.all, nodesize=1, ntree=120, mtry=5)
+
+plot(forest.All.All)
+
+forestPredict.All.All.Testing <- predict(forest.All.All, linkTransformedTest.PCA, type="class")
+table(linkTransformedTest.PCA$binnedY, forestPredict.All.All.Testing)
+
+plotROC(as.integer(linkTransformedTest.PCA$binnedY == "Spam"), as.integer(forestPredict.All.All.Testing == "Spam"))
+auc_roc(as.integer(linkTransformedTest.PCA$binnedY == "Spam"), as.integer(forestPredict.All.All.Testing == "Spam"))
+```
+54.6% AUC
+
+### Training with Naive Bayes
+
+```{r}
+naiveBayesModel.PCA <- naiveBayes(binnedY ~ ., data=linkTransformedBalancedTrain.PCA)
+
+naiveBayesPredict.PCA <-  predict(naiveBayesModel.PCA, linkTransformedBalancedTest.PCA, type="class")
+table(linkTransformedBalancedTest.PCA$binnedY, naiveBayesPredict.PCA)
+plotROC(as.integer(linkTransformedBalancedTest.PCA$binnedY == "Spam"), as.integer(naiveBayesPredict.PCA == "Spam"))
+auc_roc(as.integer(linkTransformedBalancedTest.PCA$binnedY == "Spam"), as.integer(naiveBayesPredict.PCA == "Spam"))
+
+naiveBayesPredict.Testing.PCA <-  predict(naiveBayesModel.PCA, linkTransformedTest.PCA, type="class")
+table(linkTransformedTest.PCA$binnedY, naiveBayesPredict.Testing.PCA)
+plotROC(as.integer(linkTransformedTest.PCA$binnedY == "Spam"), as.integer(naiveBayesPredict.Testing.PCA == "Spam"))
+auc_roc(as.integer(linkTransformedTest.PCA$binnedY == "Spam"), as.integer(naiveBayesPredict.Testing.PCA == "Spam"))
+```
+As expected, It performed worse at 53.6% AUC
+
+
+
